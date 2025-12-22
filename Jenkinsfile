@@ -6,7 +6,7 @@ pipeline {
         CONTAINER_NAME = 'aceserver'
         BROKER_NAME = 'PROD'
         SERVER_NAME = 'prodserver'
-        ACE_PROFILE = '/home/aceuser/ace-server/server/bin/mqsiprofile' // <-- update this path
+        ACE_PROFILE = '/opt/ibm/ace-13/server/bin/mqsiprofile'
     }
 
     stages {
@@ -34,13 +34,8 @@ pipeline {
                     // Create broker and server inside container
                     sh """
                         docker exec ${CONTAINER_NAME} bash -c '
-                            # Source the correct ACE profile
-                            if [ -f ${ACE_PROFILE} ]; then
-                                . ${ACE_PROFILE}
-                            else
-                                echo "ACE profile not found at ${ACE_PROFILE}"
-                                exit 1
-                            fi
+                            # Source ACE profile
+                            . ${ACE_PROFILE}
 
                             # Create broker if not exists
                             if ! mqsilist | grep -q "${BROKER_NAME}"; then
