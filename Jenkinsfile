@@ -32,13 +32,13 @@ pipeline {
                         """
                     }
 
-                    // Ensure broker and server are created and running
+                    // Create broker and server inside container and start them
                     sh """
                         docker exec ${CONTAINER_NAME} bash -c '
-                            # Source ACE environment
+                            # Source ACE profile
                             . ${ACE_PROFILE}
 
-                            # Create broker if not exists
+                            # Create broker if it doesn't exist
                             if ! mqsilist | grep -q "${BROKER_NAME}"; then
                                 echo "Creating broker ${BROKER_NAME}"
                                 mqsicreatebroker ${BROKER_NAME}
@@ -46,7 +46,15 @@ pipeline {
                                 echo "Broker already exists"
                             fi
 
-                            # Create execution group/server if not exists
+                            # Start broker if not running
+                            if ! mqsilist | grep -q "${BROKER_NAME}.*running"; then
+                                echo "Starting broker ${BROKER_NAME}"
+                                mqsistart ${BROKER_NAME}
+                            else
+                                echo "Broker already running"
+                            fi
+
+                            # Create server if it doesn't exist
                             if ! mqsilist ${BROKER_NAME} | grep -q "${SERVER_NAME}"; then
                                 echo "Creating server ${SERVER_NAME}"
                                 mqsicreateexecutiongroup ${BROKER_NAME} -e ${SERVER_NAME}
@@ -54,11 +62,10 @@ pipeline {
                                 echo "Server already exists"
                             fi
 
-                            # Start broker (this also starts all servers)
+                            # Ensure server is running (by starting broker again)
                             mqsistart ${BROKER_NAME}
 
-                            # Confirm status
-                            echo "Integration node and server status:"
+                            echo "Final status:"
                             mqsilist ${BROKER_NAME}
                         '
                     """
