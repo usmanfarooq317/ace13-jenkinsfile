@@ -13,6 +13,7 @@ pipeline {
         stage('Run ACE Container') {
             steps {
                 script {
+                    // Check if container exists
                     def containerExists = sh(
                         script: "docker ps -a --format '{{.Names}}' | grep -w ${CONTAINER_NAME} || true",
                         returnStdout: true
@@ -31,10 +32,10 @@ pipeline {
                         """
                     }
 
-                    // Create broker and server inside container
+                    // Ensure broker and server are created and running
                     sh """
                         docker exec ${CONTAINER_NAME} bash -c '
-                            # Source ACE profile
+                            # Source ACE environment
                             . ${ACE_PROFILE}
 
                             # Create broker if not exists
@@ -45,7 +46,7 @@ pipeline {
                                 echo "Broker already exists"
                             fi
 
-                            # Create server if not exists
+                            # Create execution group/server if not exists
                             if ! mqsilist ${BROKER_NAME} | grep -q "${SERVER_NAME}"; then
                                 echo "Creating server ${SERVER_NAME}"
                                 mqsicreateexecutiongroup ${BROKER_NAME} -e ${SERVER_NAME}
@@ -53,8 +54,12 @@ pipeline {
                                 echo "Server already exists"
                             fi
 
-                            # Start broker
+                            # Start broker (this also starts all servers)
                             mqsistart ${BROKER_NAME}
+
+                            # Confirm status
+                            echo "Integration node and server status:"
+                            mqsilist ${BROKER_NAME}
                         '
                     """
                 }
