@@ -1,89 +1,65 @@
-pipeline {
-    agent any
+environment {
+    KUBE_POD = 'ace-server'
+    BROKER_NAME = 'PROD'
+    SERVER_NAME = 'prodserver'
+    ACE_PROFILE = '/opt/ibm/ace-13/server/bin/mqsiprofile'
+    BAR_FILE = 'BVSRegFix2.bar'
+}
 
-    environment {
-        IMAGE_NAME = 'moiz3388/ace13:latest'
-        CONTAINER_NAME = 'aceserver'
-        BROKER_NAME = 'PROD'
-        SERVER_NAME = 'prodserver'
-        ACE_PROFILE = '/opt/ibm/ace-13/server/bin/mqsiprofile'
-        BAR_FILE = 'BVSRegFix2.bar'
-    }
+stages {
+    stage('Run ACE Pod') {
+        steps {
+            script {
+                // Apply Pod manifest
+                sh "kubectl apply -f ace-pod.yaml"
 
-    stages {
-        stage('Run ACE Container') {
-            steps {
-                script {
-                    def containerExists = sh(
-                        script: "docker ps -a --format '{{.Names}}' | grep -w ${CONTAINER_NAME} || true",
-                        returnStdout: true
-                    ).trim()
+                // Wait until Pod is running
+                sh "kubectl wait --for=condition=Ready pod/${KUBE_POD} --timeout=120s"
 
-                    if (containerExists) {
-                        echo "Container exists. Restarting..."
-                        sh "docker restart ${CONTAINER_NAME}"
-                    } else {
-                        echo "Container does not exist. Creating..."
-                        sh """
-                            docker run -d --name ${CONTAINER_NAME} \
-                                -p 7600:7600 -p 7800:7800 -p 7843:7843 \
-                                --env LICENSE=accept \
-                                ${IMAGE_NAME} tail -f /dev/null
-                        """
-                    }
-
-                    sh """
-                        docker exec ${CONTAINER_NAME} bash -l -c '
-                            . ${ACE_PROFILE}
-
-                            # Create broker if missing
-                            if ! mqsilist | grep -q "${BROKER_NAME}"; then
-                                echo "Creating broker ${BROKER_NAME}"
-                                mqsicreatebroker ${BROKER_NAME}
-                            fi
-
-                            # Stop broker before server creation (REQUIRED)
-                            if mqsilist | grep -q "${BROKER_NAME}.*running"; then
-                                echo "Stopping broker ${BROKER_NAME}"
-                                mqsistop ${BROKER_NAME}
-                            fi
-
-                            # Create server if missing
-                            if ! mqsilist ${BROKER_NAME} | grep -q "${SERVER_NAME}"; then
-                                echo "Creating server ${SERVER_NAME}"
-                                mqsicreateexecutiongroup ${BROKER_NAME} -e ${SERVER_NAME}
-                            fi
-
-                            # Start broker (starts server automatically)
-                            echo "Starting broker ${BROKER_NAME}"
-                            mqsistart ${BROKER_NAME}
-
-                            echo "Final status:"
-                            mqsilist ${BROKER_NAME}
-                        '
-                        """
-
-                }
+                // Check pod status
+                sh "kubectl get pods ${KUBE_POD} -o wide"
             }
         }
+    }
 
-        stage('Deploy BAR File') {
-            steps {
-                sh """
-                    echo "Copying BAR file into container..."
-                    docker cp ${BAR_FILE} ${CONTAINER_NAME}:/tmp/${BAR_FILE}
+    stage('Start Broker & Server') {
+        steps {
+            sh """
+                kubectl exec ${KUBE_POD} -- bash -l -c '
+                    . ${ACE_PROFILE}
 
-                    docker exec ${CONTAINER_NAME} bash -l -c '
-                        . ${ACE_PROFILE}
+                    if ! mqsilist | grep -q "${BROKER_NAME}"; then
+                        mqsicreatebroker ${BROKER_NAME}
+                    fi
 
-                        echo "Deploying BAR file ${BAR_FILE}..."
-                        mqsideploy ${BROKER_NAME} -e ${SERVER_NAME} -a /tmp/${BAR_FILE} -w 60
+                    if mqsilist | grep -q "${BROKER_NAME}.*running"; then
+                        mqsistop ${BROKER_NAME}
+                    fi
 
-                        echo "Deployment status:"
-                        mqsilist ${BROKER_NAME} -e ${SERVER_NAME}
-                    '
-                """
-            }
+                    if ! mqsilist ${BROKER_NAME} | grep -q "${SERVER_NAME}"; then
+                        mqsicreateexecutiongroup ${BROKER_NAME} -e ${SERVER_NAME}
+                    fi
+
+                    mqsistart ${BROKER_NAME}
+
+                    echo "Final status:"
+                    mqsilist ${BROKER_NAME}
+                '
+            """
+        }
+    }
+
+    stage('Deploy BAR File') {
+        steps {
+            sh """
+                kubectl cp ${BAR_FILE} ${KUBE_POD}:/tmp/${BAR_FILE}
+
+                kubectl exec ${KUBE_POD} -- bash -l -c '
+                    . ${ACE_PROFILE}
+                    mqsideploy ${BROKER_NAME} -e ${SERVER_NAME} -a /tmp/${BAR_FILE} -w 60
+                    mqsilist ${BROKER_NAME} -e ${SERVER_NAME}
+                '
+            """
         }
     }
 }
