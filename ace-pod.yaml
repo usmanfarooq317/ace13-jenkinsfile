@@ -6,13 +6,13 @@ metadata:
     app: ace
 spec:
   containers:
-    - name: ace-container
+    - name: ace
       image: moiz3388/ace13:latest
-      ports:
-        - containerPort: 7600   # HTTP
-        - containerPort: 7800   # Admin/monitoring
-        - containerPort: 7843   # HTTPS UI
       env:
         - name: LICENSE
           value: "accept"
-      command: [ "tail", "-f", "/dev/null" ]  # keep container alive
+      ports:
+        - containerPort: 7600
+        - containerPort: 7800
+        - containerPort: 7843
+      command: ["tail", "-f", "/dev/null"]
