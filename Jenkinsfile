@@ -12,11 +12,10 @@ node {
     }
 
     stage('Deploy ACE Pod') {
-        withCredentials([string(credentialsId: 'kubeconfig', variable: 'KUBECONFIG_CONTENT')]) {
+        withCredentials([file(credentialsId: 'kubeconfig', variable: 'KUBECONFIG')]) {
             sh '''
                 set -e
-                echo "$KUBECONFIG_CONTENT" > kubeconfig
-                export KUBECONFIG=$PWD/kubeconfig
+                export KUBECONFIG=$KUBECONFIG
 
                 kubectl apply -f ace-pod.yaml -n default
                 kubectl wait --for=condition=Ready pod/ace-server -n default --timeout=180s
@@ -26,14 +25,12 @@ node {
     }
 
     stage('Create & Start Broker and Server') {
-        withCredentials([string(credentialsId: 'kubeconfig', variable: 'KUBECONFIG_CONTENT')]) {
+        withCredentials([file(credentialsId: 'kubeconfig', variable: 'KUBECONFIG')]) {
             sh '''
                 set -e
-                echo "$KUBECONFIG_CONTENT" > kubeconfig
-                export KUBECONFIG=$PWD/kubeconfig
+                export KUBECONFIG=$KUBECONFIG
 
                 kubectl exec -n default ace-server -- bash -l -c "
-                    set -e
                     . /opt/ibm/ace-13/server/bin/mqsiprofile
 
                     if ! mqsilist | grep -q PROD; then
@@ -56,11 +53,10 @@ node {
     }
 
     stage('Deploy BAR File') {
-        withCredentials([string(credentialsId: 'kubeconfig', variable: 'KUBECONFIG_CONTENT')]) {
+        withCredentials([file(credentialsId: 'kubeconfig', variable: 'KUBECONFIG')]) {
             sh '''
                 set -e
-                echo "$KUBECONFIG_CONTENT" > kubeconfig
-                export KUBECONFIG=$PWD/kubeconfig
+                export KUBECONFIG=$KUBECONFIG
 
                 kubectl cp BVSRegFix2.bar default/ace-server:/tmp/BVSRegFix2.bar
 
