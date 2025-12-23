@@ -1,75 +1,124 @@
-node {
+pipeline {
+    agent any
 
-    env.KUBE_POD    = 'ace-server'
-    env.NAMESPACE   = 'default'
-    env.BROKER_NAME = 'PROD'
-    env.SERVER_NAME = 'prodserver'
-    env.ACE_PROFILE = '/opt/ibm/ace-13/server/bin/mqsiprofile'
-    env.BAR_FILE    = 'BVSRegFix2.bar'
-
-    stage('Checkout') {
-        checkout scm
+    environment {
+        KUBE_POD    = 'ace-server'
+        NAMESPACE   = 'default'
+        BROKER_NAME = 'PROD'
+        SERVER_NAME = 'prodserver'
+        ACE_PROFILE = '/opt/ibm/ace-13/server/bin/mqsiprofile'
+        BAR_FILE    = 'BVSRegFix2.bar'
     }
 
-    stage('Deploy ACE Pod') {
-        withCredentials([file(credentialsId: 'kubeconfig', variable: 'KUBECONFIG')]) {
-            sh '''
-                set -e
-                export KUBECONFIG=$KUBECONFIG
-
-                kubectl apply -f ace-pod.yaml -n default
-                kubectl wait --for=condition=Ready pod/ace-server -n default --timeout=180s
-                kubectl get pod ace-server -n default -o wide
-            '''
+    stages {
+        stage('Checkout') {
+            steps {
+                checkout scm
+            }
         }
-    }
 
-    stage('Create & Start Broker and Server') {
-        withCredentials([file(credentialsId: 'kubeconfig', variable: 'KUBECONFIG')]) {
-            sh '''
-                set -e
-                export KUBECONFIG=$KUBECONFIG
-
-                kubectl exec -n default ace-server -- bash -l -c "
-                    . /opt/ibm/ace-13/server/bin/mqsiprofile
-
-                    if ! mqsilist | grep -q PROD; then
-                        mqsicreatebroker PROD
-                    fi
-
-                    if mqsilist | grep -q 'PROD.*running'; then
-                        mqsistop PROD
-                    fi
-
-                    if ! mqsilist PROD | grep -q prodserver; then
-                        mqsicreateexecutiongroup PROD -e prodserver
-                    fi
-
-                    mqsistart PROD
-                    mqsilist PROD
-                "
-            '''
+        stage('Test K8s Access') {
+            steps {
+                withCredentials([file(credentialsId: 'kubeconfig', variable: 'KUBECONFIG')]) {
+                    sh '''
+                        set -e
+                        export KUBECONFIG=$KUBECONFIG
+                        echo "✅ Kubernetes nodes:"
+                        kubectl get nodes
+                        echo "✅ Current pods in namespace ${NAMESPACE}:"
+                        kubectl get pods -n ${NAMESPACE}
+                    '''
+                }
+            }
         }
-    }
 
-    stage('Deploy BAR File') {
-        withCredentials([file(credentialsId: 'kubeconfig', variable: 'KUBECONFIG')]) {
-            sh '''
-                set -e
-                export KUBECONFIG=$KUBECONFIG
+        stage('Deploy ACE Pod') {
+            steps {
+                withCredentials([file(credentialsId: 'kubeconfig', variable: 'KUBECONFIG')]) {
+                    sh '''
+                        set -e
+                        export KUBECONFIG=$KUBECONFIG
 
-                kubectl cp BVSRegFix2.bar default/ace-server:/tmp/BVSRegFix2.bar
+                        echo "🔹 Deploying ACE pod..."
+                        kubectl apply -f ace-pod.yaml -n ${NAMESPACE}
 
-                kubectl exec -n default ace-server -- bash -l -c "
-                    . /opt/ibm/ace-13/server/bin/mqsiprofile
-                    mqsideploy PROD -e prodserver -a /tmp/BVSRegFix2.bar -w 60
-                    mqsilist PROD -e prodserver
-                "
-            '''
+                        echo "⏳ Waiting for pod to be ready..."
+                        kubectl wait --for=condition=Ready pod/${KUBE_POD} -n ${NAMESPACE} --timeout=180s
+
+                        echo "✅ Pod status:"
+                        kubectl get pod ${KUBE_POD} -n ${NAMESPACE} -o wide
+                    '''
+                }
+            }
         }
-    }
 
-    stage('Done') {
-        echo '✅ ACE deployment completed successfully.'
+        stage('Create & Start Broker and Server') {
+            steps {
+                withCredentials([file(credentialsId: 'kubeconfig', variable: 'KUBECONFIG')]) {
+                    sh '''
+                        set -e
+                        export KUBECONFIG=$KUBECONFIG
+
+                        echo "🔹 Setting up broker and server..."
+                        kubectl exec -n ${NAMESPACE} ${KUBE_POD} -- bash -l -c "
+                            source ${ACE_PROFILE}
+
+                            # Create broker if not exists
+                            if ! mqsilist | grep -q ${BROKER_NAME}; then
+                                echo 'Creating broker ${BROKER_NAME}...'
+                                mqsicreatebroker ${BROKER_NAME}
+                            fi
+
+                            # Stop broker if running
+                            if mqsilist | grep -q '${BROKER_NAME}.*running'; then
+                                echo 'Stopping running broker ${BROKER_NAME}...'
+                                mqsistop ${BROKER_NAME}
+                            fi
+
+                            # Create execution group if not exists
+                            if ! mqsilist ${BROKER_NAME} | grep -q ${SERVER_NAME}; then
+                                echo 'Creating execution group ${SERVER_NAME}...'
+                                mqsicreateexecutiongroup ${BROKER_NAME} -e ${SERVER_NAME}
+                            fi
+
+                            # Start broker
+                            echo 'Starting broker ${BROKER_NAME}...'
+                            mqsistart ${BROKER_NAME}
+
+                            echo '✅ Broker and server setup complete.'
+                            mqsilist ${BROKER_NAME}
+                        "
+                    '''
+                }
+            }
+        }
+
+        stage('Deploy BAR File') {
+            steps {
+                withCredentials([file(credentialsId: 'kubeconfig', variable: 'KUBECONFIG')]) {
+                    sh '''
+                        set -e
+                        export KUBECONFIG=$KUBECONFIG
+
+                        echo "🔹 Copying BAR file to pod..."
+                        kubectl cp ${BAR_FILE} ${NAMESPACE}/${KUBE_POD}:/tmp/${BAR_FILE}
+
+                        echo "🔹 Deploying BAR file..."
+                        kubectl exec -n ${NAMESPACE} ${KUBE_POD} -- bash -l -c "
+                            source ${ACE_PROFILE}
+                            mqsideploy ${BROKER_NAME} -e ${SERVER_NAME} -a /tmp/${BAR_FILE} -w 60
+                            echo '✅ BAR deployment complete.'
+                            mqsilist ${BROKER_NAME} -e ${SERVER_NAME}
+                        "
+                    '''
+                }
+            }
+        }
+
+        stage('Done') {
+            steps {
+                echo '🎉 ACE deployment completed successfully.'
+            }
+        }
     }
 }
