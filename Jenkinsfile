@@ -12,55 +12,64 @@ node {
     }
 
     stage('Deploy ACE Pod') {
-        withCredentials([file(credentialsId: 'kubeconfig', variable: 'KUBECONFIG')]) {
-            sh """
-                export KUBECONFIG=${KUBECONFIG}
-                kubectl apply -f ace-pod.yaml -n ${NAMESPACE}
-                kubectl wait --for=condition=Ready pod/${KUBE_POD} -n ${NAMESPACE} --timeout=180s
-                kubectl get pod ${KUBE_POD} -n ${NAMESPACE} -o wide
-            """
+        withCredentials([string(credentialsId: 'kubeconfig', variable: 'KUBECONFIG_CONTENT')]) {
+            sh '''
+                set -e
+                echo "$KUBECONFIG_CONTENT" > kubeconfig
+                export KUBECONFIG=$PWD/kubeconfig
+
+                kubectl apply -f ace-pod.yaml -n default
+                kubectl wait --for=condition=Ready pod/ace-server -n default --timeout=180s
+                kubectl get pod ace-server -n default -o wide
+            '''
         }
     }
 
     stage('Create & Start Broker and Server') {
-        withCredentials([file(credentialsId: 'kubeconfig', variable: 'KUBECONFIG')]) {
-            sh """
-                export KUBECONFIG=${KUBECONFIG}
-                kubectl exec -n ${NAMESPACE} ${KUBE_POD} -- bash -l -c '
+        withCredentials([string(credentialsId: 'kubeconfig', variable: 'KUBECONFIG_CONTENT')]) {
+            sh '''
+                set -e
+                echo "$KUBECONFIG_CONTENT" > kubeconfig
+                export KUBECONFIG=$PWD/kubeconfig
+
+                kubectl exec -n default ace-server -- bash -l -c "
                     set -e
-                    . ${ACE_PROFILE}
+                    . /opt/ibm/ace-13/server/bin/mqsiprofile
 
-                    if ! mqsilist | grep -q "${BROKER_NAME}"; then
-                        mqsicreatebroker ${BROKER_NAME}
+                    if ! mqsilist | grep -q PROD; then
+                        mqsicreatebroker PROD
                     fi
 
-                    if mqsilist | grep -q "${BROKER_NAME}.*running"; then
-                        mqsistop ${BROKER_NAME}
+                    if mqsilist | grep -q 'PROD.*running'; then
+                        mqsistop PROD
                     fi
 
-                    if ! mqsilist ${BROKER_NAME} | grep -q "${SERVER_NAME}"; then
-                        mqsicreateexecutiongroup ${BROKER_NAME} -e ${SERVER_NAME}
+                    if ! mqsilist PROD | grep -q prodserver; then
+                        mqsicreateexecutiongroup PROD -e prodserver
                     fi
 
-                    mqsistart ${BROKER_NAME}
-                    mqsilist ${BROKER_NAME}
-                '
-            """
+                    mqsistart PROD
+                    mqsilist PROD
+                "
+            '''
         }
     }
 
     stage('Deploy BAR File') {
-        withCredentials([file(credentialsId: 'kubeconfig', variable: 'KUBECONFIG')]) {
-            sh """
-                export KUBECONFIG=${KUBECONFIG}
-                kubectl cp ${BAR_FILE} ${NAMESPACE}/${KUBE_POD}:/tmp/${BAR_FILE}
+        withCredentials([string(credentialsId: 'kubeconfig', variable: 'KUBECONFIG_CONTENT')]) {
+            sh '''
+                set -e
+                echo "$KUBECONFIG_CONTENT" > kubeconfig
+                export KUBECONFIG=$PWD/kubeconfig
 
-                kubectl exec -n ${NAMESPACE} ${KUBE_POD} -- bash -l -c '
-                    . ${ACE_PROFILE}
-                    mqsideploy ${BROKER_NAME} -e ${SERVER_NAME} -a /tmp/${BAR_FILE} -w 60
-                    mqsilist ${BROKER_NAME} -e ${SERVER_NAME}
-                '
-            """
+                kubectl cp BVSRegFix2.bar default/ace-server:/tmp/BVSRegFix2.bar
+
+                kubectl exec -n default ace-server -- bash -l -c "
+                    . /opt/ibm/ace-13/server/bin/mqsiprofile
+                    mqsideploy PROD -e prodserver -a /tmp/BVSRegFix2.bar -w 60
+                    mqsilist PROD -e prodserver
+                "
+            '''
         }
     }
 
