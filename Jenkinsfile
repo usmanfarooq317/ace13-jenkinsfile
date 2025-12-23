@@ -70,6 +70,6 @@ node {
     }
 
     stage('Done') {
-        echo '✅ ACE deployment completed successfully'
+        echo '✅ ACE deployment completed successfully.'
     }
 }
