@@ -7,6 +7,7 @@ pipeline {
         BROKER_NAME = 'PROD'
         SERVER_NAME = 'prodserver'
         ACE_PROFILE = '/opt/ibm/ace-13/server/bin/mqsiprofile'
+        BAR_FILE = 'BVSRegFix2.bar'
     }
 
     stages {
@@ -31,50 +32,47 @@ pipeline {
                         """
                     }
 
-                    // Run ACE commands inside a bash login shell
                     sh """
                         docker exec ${CONTAINER_NAME} bash -l -c '
-                            # Source ACE profile
-                            if [ -f ${ACE_PROFILE} ]; then
-                                . ${ACE_PROFILE}
-                            else
-                                echo "ACE profile not found at ${ACE_PROFILE}"
-                                exit 1
-                            fi
+                            . ${ACE_PROFILE}
 
                             # Create broker if missing
                             if ! mqsilist | grep -q "${BROKER_NAME}"; then
-                                echo "Creating broker ${BROKER_NAME}"
                                 mqsicreatebroker ${BROKER_NAME}
-                            else
-                                echo "Broker already exists"
                             fi
 
-                            # Start broker if not running
-                            if ! mqsilist | grep -q "${BROKER_NAME}.*running"; then
-                                echo "Starting broker ${BROKER_NAME}"
-                                mqsistart ${BROKER_NAME}
-                            else
-                                echo "Broker already running"
-                            fi
+                            # Start broker
+                            mqsistart ${BROKER_NAME}
 
                             # Create server if missing
                             if ! mqsilist ${BROKER_NAME} | grep -q "${SERVER_NAME}"; then
-                                echo "Creating server ${SERVER_NAME}"
                                 mqsicreateexecutiongroup ${BROKER_NAME} -e ${SERVER_NAME}
-                            else
-                                echo "Server already exists"
                             fi
 
-                            # Ensure broker and server are running
+                            # Ensure everything is running
                             mqsistart ${BROKER_NAME}
-
-                            # Show final status
-                            echo "Final status:"
-                            mqsilist ${BROKER_NAME}
                         '
                     """
                 }
+            }
+        }
+
+        stage('Deploy BAR File') {
+            steps {
+                sh """
+                    echo "Copying BAR file into container..."
+                    docker cp ${BAR_FILE} ${CONTAINER_NAME}:/tmp/${BAR_FILE}
+
+                    docker exec ${CONTAINER_NAME} bash -l -c '
+                        . ${ACE_PROFILE}
+
+                        echo "Deploying BAR file ${BAR_FILE}..."
+                        mqsideploy ${BROKER_NAME} -e ${SERVER_NAME} -a /tmp/${BAR_FILE} -w 60
+
+                        echo "Deployment status:"
+                        mqsilist ${BROKER_NAME} -e ${SERVER_NAME}
+                    '
+                """
             }
         }
     }
