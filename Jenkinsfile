@@ -38,21 +38,31 @@ pipeline {
 
                             # Create broker if missing
                             if ! mqsilist | grep -q "${BROKER_NAME}"; then
+                                echo "Creating broker ${BROKER_NAME}"
                                 mqsicreatebroker ${BROKER_NAME}
                             fi
 
-                            # Start broker
-                            mqsistart ${BROKER_NAME}
+                            # Stop broker before server creation (REQUIRED)
+                            if mqsilist | grep -q "${BROKER_NAME}.*running"; then
+                                echo "Stopping broker ${BROKER_NAME}"
+                                mqsistop ${BROKER_NAME}
+                            fi
 
                             # Create server if missing
                             if ! mqsilist ${BROKER_NAME} | grep -q "${SERVER_NAME}"; then
+                                echo "Creating server ${SERVER_NAME}"
                                 mqsicreateexecutiongroup ${BROKER_NAME} -e ${SERVER_NAME}
                             fi
 
-                            # Ensure everything is running
+                            # Start broker (starts server automatically)
+                            echo "Starting broker ${BROKER_NAME}"
                             mqsistart ${BROKER_NAME}
+
+                            echo "Final status:"
+                            mqsilist ${BROKER_NAME}
                         '
-                    """
+                        """
+
                 }
             }
         }
