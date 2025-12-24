@@ -2,53 +2,69 @@ pipeline {
     agent any
 
     environment {
-        IMAGE_NAME = 'moiz3388/ace13:latest'
+        IMAGE_NAME     = 'moiz3388/ace13:latest'
         CONTAINER_NAME = 'aceserver'
-        BROKER_NAME = 'PROD'
-        SERVER_NAME = 'prodserver'
-        ACE_PROFILE = '/opt/ibm/ace-13/server/bin/mqsiprofile'
-        BAR_FILE = 'BVSRegFix2.bar'
+        BROKER_NAME    = 'PROD'
+        SERVER_NAME    = 'prodserver'
+        ACE_PROFILE    = '/opt/ibm/ace-13/server/bin/mqsiprofile'
+        BAR_FILE       = 'BVSRegFix2.bar'
     }
 
     stages {
-        stage('Run ACE Container') {
+
+        stage('Prepare ACE Container') {
             steps {
                 script {
-                    def containerExists = sh(
+                    def running = sh(
+                        script: "docker ps --format '{{.Names}}' | grep -w ${CONTAINER_NAME} || true",
+                        returnStdout: true
+                    ).trim()
+
+                    def exists = sh(
                         script: "docker ps -a --format '{{.Names}}' | grep -w ${CONTAINER_NAME} || true",
                         returnStdout: true
                     ).trim()
 
-                    if (containerExists) {
-                        echo "Container exists. Restarting..."
-                        sh "docker restart ${CONTAINER_NAME}"
+                    if (running) {
+                        echo "Container already running"
+                    } else if (exists) {
+                        echo "Starting existing container"
+                        sh "docker start ${CONTAINER_NAME}"
                     } else {
-                        echo "Container does not exist. Creating..."
+                        echo "Creating new ACE container"
                         sh """
                             docker run -d --name ${CONTAINER_NAME} \
-                                -p 7600:7600 -p 7800:7800 -p 7843:7843 \
-                                --env LICENSE=accept \
-                                ${IMAGE_NAME} tail -f /dev/null
+                                -p 7600:7600 \
+                                -p 7800:7800 \
+                                -p 7843:7843 \
+                                -e LICENSE=accept \
+                                ${IMAGE_NAME}
                         """
                     }
+                }
+            }
+        }
 
-                    sh """
-docker exec ${CONTAINER_NAME} bash -l -c '
+        stage('Configure Broker & Server') {
+            steps {
+                sh """
+docker exec ${CONTAINER_NAME} bash -lc '
+    set -e
     . ${ACE_PROFILE}
 
     # Create broker if missing
-    if ! mqsilist | grep -q "${BROKER_NAME}"; then
+    if ! mqsilist | grep -q "^${BROKER_NAME}"; then
         echo "Creating broker ${BROKER_NAME}"
         mqsicreatebroker ${BROKER_NAME}
     fi
 
-    # Stop broker before server creation (REQUIRED)
+    # Stop broker if running (required for server creation)
     if mqsilist | grep -q "${BROKER_NAME}.*running"; then
         echo "Stopping broker ${BROKER_NAME}"
         mqsistop ${BROKER_NAME}
     fi
 
-    # Create server if missing
+    # Create integration server if missing
     if ! mqsilist ${BROKER_NAME} | grep -q "${SERVER_NAME}"; then
         echo "Creating server ${SERVER_NAME}"
         mqsicreateexecutiongroup ${BROKER_NAME} -e ${SERVER_NAME}
@@ -58,31 +74,33 @@ docker exec ${CONTAINER_NAME} bash -l -c '
     echo "Starting broker ${BROKER_NAME}"
     mqsistart ${BROKER_NAME}
 
-    echo "Final status:"
+    echo "Broker and server status:"
     mqsilist ${BROKER_NAME}
 '
 """
-
-                }
             }
         }
 
         stage('Deploy BAR File') {
             steps {
                 sh """
-                    echo "Copying BAR file into container..."
+                    echo "Copying BAR file to container..."
                     docker cp ${BAR_FILE} ${CONTAINER_NAME}:/tmp/${BAR_FILE}
 
-                    docker exec ${CONTAINER_NAME} bash -l -c '
-                        . ${ACE_PROFILE}
+docker exec ${CONTAINER_NAME} bash -lc '
+    set -e
+    . ${ACE_PROFILE}
 
-                        echo "Deploying BAR file ${BAR_FILE}..."
-                        mqsideploy ${BROKER_NAME} -e ${SERVER_NAME} -a /tmp/${BAR_FILE} -w 60
+    echo "Deploying BAR file ${BAR_FILE}"
+    mqsideploy ${BROKER_NAME} \
+        -e ${SERVER_NAME} \
+        -a /tmp/${BAR_FILE} \
+        -w 120
 
-                        echo "Deployment status:"
-                        mqsilist ${BROKER_NAME} -e ${SERVER_NAME}
-                    '
-                """
+    echo "Deployment result:"
+    mqsilist ${BROKER_NAME} -e ${SERVER_NAME}
+'
+"""
             }
         }
     }
