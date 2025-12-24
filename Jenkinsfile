@@ -15,7 +15,7 @@ pipeline {
         stage('Clean & Start ACE Container') {
             steps {
                 sh '''
-                    echo "Cleaning any existing ACE container..."
+                    echo "Removing old container if exists..."
                     docker rm -f ${CONTAINER_NAME} || true
 
                     echo "Starting fresh ACE container..."
@@ -23,7 +23,6 @@ pipeline {
                         -e LICENSE=accept \
                         ${IMAGE_NAME} tail -f /dev/null
 
-                    echo "Waiting for container to be ready..."
                     sleep 10
                 '''
             }
@@ -31,57 +30,54 @@ pipeline {
 
         stage('Configure Broker & Server') {
             steps {
-                sh '''
-                    docker exec ${CONTAINER_NAME} bash -l -c '
-                        set -e
-                        . ${ACE_PROFILE}
+                sh """
+docker exec ${CONTAINER_NAME} bash -l -c "
+set -e
+. ${ACE_PROFILE}
 
-                        echo "Checking broker..."
-                        if ! mqsilist | grep -q ${BROKER_NAME}; then
-                            echo "Creating broker ${BROKER_NAME}"
-                            mqsicreatebroker ${BROKER_NAME}
-                        fi
+echo 'Checking broker...'
+if ! mqsilist | grep -q ${BROKER_NAME}; then
+    echo 'Creating broker ${BROKER_NAME}'
+    mqsicreatebroker ${BROKER_NAME}
+fi
 
-                        if mqsilist | grep -q "${BROKER_NAME}.*running"; then
-                            echo "Stopping broker before server creation"
-                            mqsistop ${BROKER_NAME}
-                        fi
+echo 'Stopping broker for server creation (safe)...'
+mqsistop ${BROKER_NAME} || true
 
-                        if ! mqsilist ${BROKER_NAME} | grep -q ${SERVER_NAME}; then
-                            echo "Creating server ${SERVER_NAME}"
-                            mqsicreateexecutiongroup ${BROKER_NAME} -e ${SERVER_NAME}
-                        fi
+echo 'Checking integration server...'
+if ! mqsilist ${BROKER_NAME} | grep -q ${SERVER_NAME}; then
+    echo 'Creating server ${SERVER_NAME}'
+    mqsicreateexecutiongroup ${BROKER_NAME} -e ${SERVER_NAME}
+fi
 
-                        echo "Starting broker ${BROKER_NAME}"
-                        mqsistart ${BROKER_NAME}
+echo 'Starting broker...'
+mqsistart ${BROKER_NAME}
 
-                        echo "Final status:"
-                        mqsilist ${BROKER_NAME}
-                    '
-                '''
+echo 'Broker status:'
+mqsilist ${BROKER_NAME}
+"
+                """
             }
         }
 
         stage('Deploy BAR File') {
             steps {
-                sh '''
-                    echo "Copying BAR file into container..."
+                sh """
+                    echo "Copying BAR file..."
                     docker cp ${BAR_FILE} ${CONTAINER_NAME}:/tmp/${BAR_FILE}
 
-                    docker exec ${CONTAINER_NAME} bash -l -c '
-                        set -e
-                        . ${ACE_PROFILE}
+docker exec ${CONTAINER_NAME} bash -l -c "
+set -e
+. ${ACE_PROFILE}
 
-                        echo "Deploying BAR file..."
-                        mqsideploy ${BROKER_NAME} \
-                            -e ${SERVER_NAME} \
-                            -a /tmp/${BAR_FILE} \
-                            -w 120
+echo 'Deploying BAR file...'
+mqsideploy ${BROKER_NAME} -e ${SERVER_NAME} \
+    -a /tmp/${BAR_FILE} -w 60
 
-                        echo "Deployment complete."
-                        mqsilist ${BROKER_NAME} -e ${SERVER_NAME}
-                    '
-                '''
+echo 'Deployment status:'
+mqsilist ${BROKER_NAME} -e ${SERVER_NAME}
+"
+                """
             }
         }
     }
