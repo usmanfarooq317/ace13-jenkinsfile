@@ -15,72 +15,75 @@ pipeline {
         stage('Clean & Start ACE Container') {
             steps {
                 sh '''
-                    echo "Cleaning old container (if any)..."
-                    docker rm -f ${CONTAINER_NAME} || true
+                echo "Cleaning old container (if any)..."
+                docker rm -f ${CONTAINER_NAME} || true
 
-                    echo "Starting ACE container..."
-                    docker run -d --name ${CONTAINER_NAME} \
-                      -e LICENSE=accept \
-                      ${IMAGE_NAME}
+                echo "Starting ACE container..."
+                docker run -d --name ${CONTAINER_NAME} \
+                    -e LICENSE=accept \
+                    ${IMAGE_NAME}
 
-                    echo "Waiting for ACE to initialize..."
-                    sleep 20
+                echo "Waiting for ACE to initialize..."
+                sleep 20
                 '''
             }
         }
 
         stage('Configure Broker & Server') {
             steps {
-                sh '''
-                    docker exec ${CONTAINER_NAME} bash -c "
+                sh """
+                docker exec ${CONTAINER_NAME} bash -c '
                     set -e
                     . ${ACE_PROFILE}
 
-                    echo 'Checking integration node...'
+                    echo "Checking integration node..."
                     if mqsilist | grep -q ${BROKER_NAME}; then
-                        echo 'Broker exists → restarting'
+                        echo "Broker exists → restarting"
                         mqsistop ${BROKER_NAME} || true
+                        mqsistart ${BROKER_NAME}
                     else
-                        echo 'Broker does not exist → creating'
+                        echo "Broker does not exist → creating"
                         mqsicreatebroker ${BROKER_NAME}
+                        mqsistart ${BROKER_NAME}
                     fi
 
-                    echo 'Creating integration server if missing...'
+                    echo "Waiting for broker to be fully up..."
+                    sleep 10
+
+                    echo "Checking integration server..."
                     if ! mqsilist ${BROKER_NAME} | grep -q ${SERVER_NAME}; then
-                        echo 'Creating server ${SERVER_NAME}'
+                        echo "Creating integration server ${SERVER_NAME}"
                         mqsicreateexecutiongroup ${BROKER_NAME} -e ${SERVER_NAME}
+                    else
+                        echo "Integration server already exists"
                     fi
 
-                    echo 'Starting broker...'
-                    mqsistart ${BROKER_NAME}
-
-                    echo 'Final broker status:'
+                    echo "Final status:"
                     mqsilist ${BROKER_NAME}
-                    "
-                '''
+                '
+                """
             }
         }
 
         stage('Deploy BAR File') {
             steps {
-                sh '''
-                    echo "Copying BAR file into container..."
-                    docker cp ${BAR_FILE} ${CONTAINER_NAME}:/tmp/${BAR_FILE}
+                sh """
+                echo "Copying BAR file into container..."
+                docker cp ${BAR_FILE} ${CONTAINER_NAME}:/tmp/${BAR_FILE}
 
-                    docker exec ${CONTAINER_NAME} bash -c "
-                    set -e
+                docker exec ${CONTAINER_NAME} bash -c '
                     . ${ACE_PROFILE}
 
-                    echo 'Deploying BAR file...'
+                    echo "Deploying BAR file..."
                     mqsideploy ${BROKER_NAME} \
                         -e ${SERVER_NAME} \
                         -a /tmp/${BAR_FILE} \
-                        -w 60
+                        -w 120
 
-                    echo 'Deployment status:'
+                    echo "Deployment status:"
                     mqsilist ${BROKER_NAME} -e ${SERVER_NAME}
-                    "
-                '''
+                '
+                """
             }
         }
     }
